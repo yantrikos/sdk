@@ -7,7 +7,7 @@ The SDK enforces tier-awareness and provides routing for deployment.
 DOI: 10.5281/zenodo.19228710
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 from yantrikos.tier import Tier, get_tier_config, TIER_CONFIG
 from yantrikos.base_tool import BaseTool
@@ -21,7 +21,9 @@ from yantrikos.errors import (
     ExecutionError, ParameterError,
 )
 from yantrikos.detect import (
-    detect_tier, detect_tier_from_ollama, get_ollama_parameter_count,
+    detect_tier, detect_tier_auto,
+    detect_tier_from_ollama, get_ollama_parameter_count,
+    detect_tier_from_openrouter, get_openrouter_parameter_count,
     extract_param_count, detect_model_family,
 )
 from yantrikos.native import to_native_tool, to_native_tool_nameonly, to_native_tools
