@@ -1,40 +1,42 @@
 """
-Model tier detection — auto-detect capability tier from model name.
+Model tier detection — auto-detect capability tier from model name or parameter count.
 
 Based on ModelCapabilityProfile from YantrikOS (capability.rs).
-Handles Ollama tag format, HuggingFace format, and cloud model names.
+Supports: Ollama API (model_info.general.parameter_count), name parsing, cloud models.
 """
 
 import re
+import json
+import urllib.request
 from typing import Optional
 from yantrikos.tier import Tier
 
 
-def detect_tier(model_name: str) -> Tier:
+def detect_tier(model_name: str, parameter_count: Optional[int] = None) -> Tier:
     """
-    Detect model tier from name string.
+    Detect model tier from name string or exact parameter count.
+
+    Args:
+        model_name: Model identifier (e.g., "qwen3.5:9b", "claude-opus-4-6")
+        parameter_count: Exact parameter count (e.g., 9653104368). Takes priority over name parsing.
 
     Examples:
-        detect_tier("qwen3.5:0.6b")     -> Tier.S
-        detect_tier("qwen2.5:1.5b")     -> Tier.S
-        detect_tier("qwen3.5:9b")       -> Tier.M
-        detect_tier("Qwen3.5-9B")       -> Tier.M
-        detect_tier("gpt-oss:20b")      -> Tier.L
-        detect_tier("qwen3.5:35b")      -> Tier.XL
-        detect_tier("claude-opus-4-6")   -> Tier.XL
-        detect_tier("gpt-4o")           -> Tier.XL
+        detect_tier("qwen3.5:0.6b")                -> Tier.S
+        detect_tier("qwen2.5:1.5b")                -> Tier.S
+        detect_tier("qwen3.5:9b")                  -> Tier.M
+        detect_tier("gpt-oss:20b")                 -> Tier.L
+        detect_tier("qwen3.5:35b")                 -> Tier.XL
+        detect_tier("claude-opus-4-6")              -> Tier.XL
+        detect_tier("custom", parameter_count=9_653_104_368)  -> Tier.M
     """
-    params = extract_param_count(model_name)
+    # Use exact parameter count if provided
+    if parameter_count is not None:
+        return _tier_from_param_count(parameter_count / 1e9)
 
+    # Try name-based detection
+    params = extract_param_count(model_name)
     if params is not None:
-        if params < 4.0:
-            return Tier.S
-        elif params < 14.0:
-            return Tier.M
-        elif params < 35.0:
-            return Tier.L
-        else:
-            return Tier.XL
+        return _tier_from_param_count(params)
 
     # Cloud models -> XL
     lower = model_name.lower()
@@ -43,6 +45,67 @@ def detect_tier(model_name: str) -> Tier:
 
     # Unknown -> M (safe default)
     return Tier.M
+
+
+def detect_tier_from_ollama(model_name: str, host: str = "http://localhost:11434") -> Tier:
+    """
+    Detect tier by querying Ollama's /api/show for exact parameter count.
+
+    Uses model_info."general.parameter_count" which is available for all
+    local text models served by Ollama.
+
+    Args:
+        model_name: Ollama model name (e.g., "qwen3.5:9b")
+        host: Ollama API host (default: http://localhost:11434)
+
+    Returns:
+        Detected Tier
+
+    Raises:
+        ConnectionError: If Ollama is not reachable
+    """
+    param_count = get_ollama_parameter_count(model_name, host)
+    if param_count is not None:
+        return _tier_from_param_count(param_count / 1e9)
+    # Fallback to name parsing
+    return detect_tier(model_name)
+
+
+def get_ollama_parameter_count(model_name: str, host: str = "http://localhost:11434") -> Optional[int]:
+    """
+    Query Ollama /api/show for the exact parameter count.
+
+    Returns the raw parameter count (e.g., 9653104368 for a 9B model)
+    or None if unavailable.
+    """
+    try:
+        payload = json.dumps({"model": model_name}).encode()
+        req = urllib.request.Request(
+            f"{host}/api/show",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read())
+        model_info = data.get("model_info", {})
+        count = model_info.get("general.parameter_count")
+        if count is not None:
+            return int(count)
+    except Exception:
+        pass
+    return None
+
+
+def _tier_from_param_count(params_b: float) -> Tier:
+    """Classify tier from parameter count in billions."""
+    if params_b < 4.0:
+        return Tier.S
+    elif params_b < 14.0:
+        return Tier.M
+    elif params_b < 35.0:
+        return Tier.L
+    else:
+        return Tier.XL
 
 
 def extract_param_count(model_name: str) -> Optional[float]:
